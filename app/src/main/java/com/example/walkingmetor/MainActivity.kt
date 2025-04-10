@@ -1,99 +1,133 @@
 package com.example.walkingmetor
 
-import StepCounterService
 import android.app.AlertDialog
-import android.content.Context
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.lifecycle.lifecycleScope
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.example.walkingmetor.R.layout.metor_win
-import com.example.walkingmetor.R.layout.start_win
-import com.example.walkingmetor.ui.theme.WalkingMetorTheme
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import com.example.walkingmetor.StepMetor.StepCounterService
+import java.time.LocalDate
+
 
 class MainActivity : ComponentActivity() {
-    val stepCounter = StepCounterService()
-    val context: Context = this
-
+    private lateinit var prefs: SharedPreferences
+    private lateinit var tv_goal : TextView
+    private lateinit var tvStepCount: TextView
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "step_${LocalDate.now()}") {
+            updateStepCount()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        EgdeToEdge();
-        StartWin()
-        checkOfPermission()
+        prefs = getSharedPreferences("StepPrefs", Context.MODE_PRIVATE)
 
+        if (!hasStepCounterSensor()) {
+            showSensorError()
+            return
+        }
+
+        if (!checkStepCounterPermission()) {
+            requestStepCounterPermission()
+            return
+        }
+
+        startStepCounterService()
     }
 
     override fun onResume() {
         super.onResume()
-
         setContentView(metor_win)
+
+        tvStepCount = findViewById(R.id.tv_step_count)
+        tv_goal = findViewById(R.id.tv_goal)
+
+        prefs.registerOnSharedPreferenceChangeListener(prefListener)
+
+        updateStepCount()
     }
 
     override fun onStop() {
+        prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
         super.onStop()
     }
 
-    fun checkOfPermission(){
-        while (stepCounter.start(context)){
-            AlertDialog.Builder(this)
-                .setTitle("Требуется разрешение")
-                .setMessage("Для подсчёта шагов необходимо разрешение на отслеживание физической активности. Без него приложение может работать некорректно.")
-                .setPositiveButton("OK") { _, _ ->
-                    requestPermissions(
-                        arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),
-                        1
-                    )
-                }
-                .show()
+    @SuppressLint("SetTextI18n")
+    private fun updateStepCount() {
+        val currentDate = LocalDate.now()
+        val steps = prefs.getInt("step_${currentDate}", 0)
+        tvStepCount.text = "Шаги: $steps"
+
+        tv_goal.text = LocalDate.now().toString()
+    }
+
+    private fun hasStepCounterSensor(): Boolean {
+        val sensorManager = getSystemService(SensorManager::class.java)
+        return sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
+    }
+
+    private fun checkStepCounterPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACTIVITY_RECOGNITION
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
         }
     }
 
-    fun StartWin(){
-        setContentView(start_win)
-        lifecycleScope.launch {
-            delay(30000)
+    private fun requestStepCounterPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),
+                0
+            )
         }
     }
 
-    fun EgdeToEdge(){
-        enableEdgeToEdge()
-        setContent {
-            WalkingMetorTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+    private fun startStepCounterService() {
+        val serviceIntent = Intent(this, StepCounterService::class.java)
+        ContextCompat.startForegroundService(this, serviceIntent)
+    }
+
+    private fun showSensorError() {
+        AlertDialog.Builder(this)
+            .setTitle("Ошибка")
+            .setMessage("Ваше устройство не поддерживает счетчик шагов")
+            .setPositiveButton("OK") { _, _ ->
+                stopService(Intent(this, StepCounterService::class.java))
+                finish() }
+            .show()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 0) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                startStepCounterService()
+            } else {
+                Toast.makeText(this, "Разрешение необходимо для работы приложения", Toast.LENGTH_LONG).show()
+                finish()
             }
         }
-    }
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    WalkingMetorTheme {
-        Greeting("Android")
     }
 }
